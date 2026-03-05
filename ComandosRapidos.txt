@@ -1,0 +1,6 @@
+adb kill-server
+adb start-server
+
+
+adb devices     
+flutter run -d AY7GUT3922000759
