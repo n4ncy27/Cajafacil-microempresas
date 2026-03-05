@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'splash_screen.dart';
 import 'pages/dashboard_page.dart';
@@ -20,6 +21,17 @@ class CajaFacilApp extends StatelessWidget {
     return MaterialApp(
       title: 'Caja Fácil',
       debugShowCheckedModeBanner: false,
+      // ── Localización en español ──────────────────────────────────────────
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('es', 'CO'),
+      ],
+      locale: const Locale('es', 'CO'),
+      // ─────────────────────────────────────────────────────────────────────
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF3366FF),

@@ -72,7 +72,15 @@ class _InventarioPageState extends State<InventarioPage> {
     final precioCompraCtrl = TextEditingController(text: producto?['precio_compra']?.toString() ?? '');
     final precioVentaCtrl = TextEditingController(text: producto?['precio_venta']?.toString() ?? '');
     final stockMinimoCtrl = TextEditingController(text: producto?['stock_minimo']?.toString() ?? '5');
-    final vencimientoCtrl = TextEditingController(text: producto?['fecha_vencimiento'] ?? '');
+
+    // Parsear fecha existente si hay
+    DateTime? fechaSeleccionada;
+    if (producto?['fecha_vencimiento'] != null &&
+        (producto!['fecha_vencimiento'] as String).isNotEmpty) {
+      try {
+        fechaSeleccionada = DateTime.parse(producto['fecha_vencimiento']);
+      } catch (_) {}
+    }
 
     showModalBottomSheet(
       context: context,
@@ -81,102 +89,192 @@ class _InventarioPageState extends State<InventarioPage> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          left: 24, right: 24, top: 24,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Text(
-                    esEdicion ? 'Editar Producto' : 'Nuevo Producto',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 18, fontWeight: FontWeight.w700,
-                      color: const Color(0xFF3366FF),
-                    ),
-                  ),
-                  const Spacer(),
-                  // ID solo lectura, visible solo al editar
-                  if (esEdicion)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFEEF2FF),
-                        borderRadius: BorderRadius.circular(8),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(
+            left: 24, right: 24, top: 24,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Título + ID
+                Row(
+                  children: [
+                    Text(
+                      esEdicion ? 'Editar Producto' : 'Nuevo Producto',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 18, fontWeight: FontWeight.w700,
+                        color: const Color(0xFF3366FF),
                       ),
-                      child: Text(
-                        _formatearId(producto!['id']),
-                        style: GoogleFonts.montserrat(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: const Color(0xFF3366FF),
+                    ),
+                    const Spacer(),
+                    if (esEdicion)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEEF2FF),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          _formatearId(producto!['id']),
+                          style: GoogleFonts.montserrat(
+                            fontSize: 13, fontWeight: FontWeight.w600,
+                            color: const Color(0xFF3366FF),
+                          ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              _campo('Código', codigoCtrl),
-              _campo('Nombre del producto', nombreCtrl),
-              _campo('Cantidad', cantidadCtrl, esNumero: true),
-              _campo('Precio de compra', precioCompraCtrl, esDecimal: true),
-              _campo('Precio de venta', precioVentaCtrl, esDecimal: true),
-              _campo('Stock mínimo', stockMinimoCtrl, esNumero: true),
-              _campo('Fecha de vencimiento (YYYY-MM-DD)', vencimientoCtrl),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF3366FF),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  onPressed: () async {
-                    if (codigoCtrl.text.trim().isEmpty || nombreCtrl.text.trim().isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Código y nombre son obligatorios')),
-                      );
-                      return;
-                    }
-                    try {
-                      final data = {
-                        'codigo': codigoCtrl.text.trim(),
-                        'nombre': nombreCtrl.text.trim(),
-                        'cantidad': int.tryParse(cantidadCtrl.text) ?? 0,
-                        'precio_compra': double.tryParse(precioCompraCtrl.text) ?? 0,
-                        'precio_venta': double.tryParse(precioVentaCtrl.text) ?? 0,
-                        'stock_minimo': int.tryParse(stockMinimoCtrl.text) ?? 5,
-                        'fecha_vencimiento': vencimientoCtrl.text.trim().isEmpty
-                            ? null
-                            : vencimientoCtrl.text.trim(),
-                      };
-                      if (esEdicion) {
-                        await _db.actualizarProducto(producto!['id'], data);
-                      } else {
-                        await _db.insertarProducto(data);
-                      }
-                      if (mounted) Navigator.pop(context);
-                      _cargarProductos();
-                    } catch (e) {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Error al guardar: $e')),
-                        );
-                      }
-                    }
-                  },
-                  child: Text(
-                    esEdicion ? 'Guardar cambios' : 'Agregar producto',
-                    style: GoogleFonts.montserrat(fontWeight: FontWeight.w600, color: Colors.white),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                _campo('Código', codigoCtrl),
+                _campo('Nombre del producto', nombreCtrl),
+                _campo('Cantidad', cantidadCtrl, esNumero: true),
+                _campo('Precio de compra', precioCompraCtrl, esDecimal: true),
+                _campo('Precio de venta', precioVentaCtrl, esDecimal: true),
+                _campo('Stock mínimo', stockMinimoCtrl, esNumero: true),
+
+                // ── Selector de fecha con calendario ──────────────────────
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Fecha de vencimiento',
+                        style: GoogleFonts.montserrat(
+                            fontSize: 13, color: Colors.grey.shade700),
+                      ),
+                      const SizedBox(height: 6),
+                      InkWell(
+                        onTap: () async {
+                          final hoy = DateTime.now();
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: fechaSeleccionada ?? hoy,
+                            firstDate: hoy,
+                            lastDate: DateTime(hoy.year + 10),
+                            locale: const Locale('es', 'CO'),
+                            helpText: 'Seleccionar fecha de vencimiento',
+                            cancelText: 'Cancelar',
+                            confirmText: 'Confirmar',
+                            builder: (context, child) => Theme(
+                              data: Theme.of(context).copyWith(
+                                colorScheme: const ColorScheme.light(
+                                  primary: Color(0xFF3366FF),
+                                  onPrimary: Colors.white,
+                                  surface: Colors.white,
+                                ),
+                              ),
+                              child: child!,
+                            ),
+                          );
+                          if (picked != null) {
+                            setModalState(() => fechaSeleccionada = picked);
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 14),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey.shade400),
+                            borderRadius: BorderRadius.circular(10),
+                            color: Colors.white,
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.calendar_month_outlined,
+                                  color: fechaSeleccionada != null
+                                      ? const Color(0xFF3366FF)
+                                      : Colors.grey.shade500,
+                                  size: 20),
+                              const SizedBox(width: 10),
+                              Text(
+                                fechaSeleccionada != null
+                                    ? '${fechaSeleccionada!.day.toString().padLeft(2, '0')}/${fechaSeleccionada!.month.toString().padLeft(2, '0')}/${fechaSeleccionada!.year}'
+                                    : 'Sin fecha de vencimiento',
+                                style: GoogleFonts.montserrat(
+                                  fontSize: 14,
+                                  color: fechaSeleccionada != null
+                                      ? Colors.black87
+                                      : Colors.grey.shade500,
+                                ),
+                              ),
+                              const Spacer(),
+                              if (fechaSeleccionada != null)
+                                GestureDetector(
+                                  onTap: () =>
+                                      setModalState(() => fechaSeleccionada = null),
+                                  child: Icon(Icons.close,
+                                      size: 18, color: Colors.grey.shade500),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-            ],
+
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF3366FF),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () async {
+                      if (codigoCtrl.text.trim().isEmpty ||
+                          nombreCtrl.text.trim().isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text('Código y nombre son obligatorios')),
+                        );
+                        return;
+                      }
+                      try {
+                        final fechaStr = fechaSeleccionada != null
+                            ? '${fechaSeleccionada!.year}-${fechaSeleccionada!.month.toString().padLeft(2, '0')}-${fechaSeleccionada!.day.toString().padLeft(2, '0')}'
+                            : null;
+                        final data = {
+                          'codigo': codigoCtrl.text.trim(),
+                          'nombre': nombreCtrl.text.trim(),
+                          'cantidad': int.tryParse(cantidadCtrl.text) ?? 0,
+                          'precio_compra': double.tryParse(precioCompraCtrl.text) ?? 0,
+                          'precio_venta': double.tryParse(precioVentaCtrl.text) ?? 0,
+                          'stock_minimo': int.tryParse(stockMinimoCtrl.text) ?? 5,
+                          'fecha_vencimiento': fechaStr,
+                        };
+                        if (esEdicion) {
+                          await _db.actualizarProducto(producto!['id'], data);
+                        } else {
+                          await _db.insertarProducto(data);
+                        }
+                        if (mounted) Navigator.pop(context);
+                        _cargarProductos();
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Error al guardar: $e')),
+                          );
+                        }
+                      }
+                    },
+                    child: Text(
+                      esEdicion ? 'Guardar cambios' : 'Agregar producto',
+                      style: GoogleFonts.montserrat(
+                          fontWeight: FontWeight.w600, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
