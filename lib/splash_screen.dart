@@ -146,11 +146,11 @@ class _SplashScreenState extends State<SplashScreen>
                 'Claridad que impulsa\nel crecimiento',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.montserrat(
-                  fontSize: 30,
+                  fontSize: 25,
                   fontWeight: FontWeight.w300,
                   color: const Color.fromARGB(255, 1, 15, 56),
                   letterSpacing: 0.5,
-                  height: 1.5,
+                  height: 1.0,
                 ),
               ),
             ),

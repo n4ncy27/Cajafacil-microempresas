@@ -1,8 +1,130 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../widgets/voice_listening_modal.dart';
+import '../services/voice_parser.dart';
+import '../database/database_helper.dart';
 
-class DashboardPage extends StatelessWidget {
+class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
+
+  @override
+  State<DashboardPage> createState() => DashboardPageState();
+}
+
+class DashboardPageState extends State<DashboardPage> {
+  final DatabaseHelper _db = DatabaseHelper.instance;
+
+  double _totalHoy = 0;
+  double _ingresosTotal = 0;
+  int _ventasHoyCount = 0;
+  int _productosBajoStock = 0;
+  bool _cargando = true;
+
+  @override
+  void initState() {
+    super.initState();
+    cargarDatos();
+  }
+
+  Future<void> cargarDatos() async {
+    final ventas = await _db.obtenerVentas();
+    final bajoStock = await _db.obtenerProductosBajoStock();
+
+    final hoy = DateTime.now();
+    final ventasHoy = ventas.where((v) {
+      final f = DateTime.parse(v['fecha']);
+      return f.day == hoy.day && f.month == hoy.month && f.year == hoy.year;
+    }).toList();
+
+    final totalHoy = ventasHoy.fold<double>(
+        0, (s, v) => s + (v['total'] as num).toDouble());
+    final ingresosTotal = ventas.fold<double>(
+        0, (s, v) => s + (v['total'] as num).toDouble());
+
+    if (mounted) {
+      setState(() {
+        _totalHoy = totalHoy;
+        _ingresosTotal = ingresosTotal;
+        _ventasHoyCount = ventasHoy.length;
+        _productosBajoStock = bajoStock.length;
+        _cargando = false;
+      });
+    }
+  }
+
+  String _formatearPesos(double valor) {
+    final str = valor.toStringAsFixed(0);
+    final buffer = StringBuffer();
+    int contador = 0;
+    for (int i = str.length - 1; i >= 0; i--) {
+      if (contador > 0 && contador % 3 == 0) buffer.write('.');
+      buffer.write(str[i]);
+      contador++;
+    }
+    return '\$${buffer.toString().split('').reversed.join()}';
+  }
+
+  String _formatearCompacto(double valor) {
+    if (valor >= 1000000) {
+      return '\$${(valor / 1000000).toStringAsFixed(1)}M';
+    } else if (valor >= 1000) {
+      return '\$${(valor / 1000).toStringAsFixed(0)}K';
+    }
+    return _formatearPesos(valor);
+  }
+
+  Future<void> _registrarPorVoz(BuildContext context) async {
+    final texto = await VoiceListeningModal.show(
+      context,
+      titulo: 'Dicta tu venta',
+      ejemplo: '"Vendí 2 Café Volcán en efectivo"',
+      color: const Color(0xFF3366FF),
+    );
+    if (texto == null || texto.isEmpty) return;
+
+    final parser = VoiceParser();
+    final resultado = await parser.parsearVenta(texto);
+
+    if (!context.mounted) return;
+
+    if (!resultado.hasItems) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se encontraron productos en: "$texto"',
+              style: GoogleFonts.montserrat(fontSize: 13)),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    // Registrar directamente con forma de pago detectada o efectivo por defecto
+    final db = DatabaseHelper.instance;
+    final items = resultado.items.map((i) => i.toMap()).toList();
+    final formaPago = resultado.formaPago ?? 'Efectivo';
+    await db.registrarVenta(
+      formaPago: formaPago,
+      tipo: formaPago == 'Crédito' ? 'crédito' : 'contado',
+      items: items,
+      cliente: resultado.cliente,
+    );
+
+    if (!context.mounted) return;
+
+    final total = resultado.items.fold<double>(0, (s, i) => s + i.subtotal);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Venta registrada: ${_formatearPesos(total)} en $formaPago',
+          style: GoogleFonts.montserrat(fontSize: 13),
+        ),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    cargarDatos();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +179,7 @@ class DashboardPage extends StatelessWidget {
                       radius: 20,
                       backgroundColor: Colors.white24,
                       child: Text(
-                        'N',
+                        'J',
                         style: GoogleFonts.montserrat(
                           color: Colors.white,
                           fontWeight: FontWeight.w600,
@@ -90,7 +212,7 @@ class DashboardPage extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '\$1.573.000',
+                        _cargando ? '...' : _formatearPesos(_totalHoy),
                         style: GoogleFonts.montserrat(
                           color: Colors.white,
                           fontSize: 32,
@@ -101,13 +223,13 @@ class DashboardPage extends StatelessWidget {
                       Row(
                         children: [
                           _buildBadge(
-                            '+ Ingresos \$45.3M',
+                            '+ Ingresos ${_formatearCompacto(_ingresosTotal)}',
                             const Color(0xFF4CAF50),
                           ),
                           const SizedBox(width: 10),
                           _buildBadge(
-                            '- Gastos \$4.9M',
-                            const Color(0xFFEF5350),
+                            '${_ventasHoyCount} ventas hoy',
+                            const Color(0xFFFFFFFF),
                           ),
                         ],
                       ),
@@ -124,56 +246,64 @@ class DashboardPage extends StatelessWidget {
               child: Column(
                 children: [
                   // Registrar por voz
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 16,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1A2A5E),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.white12,
-                            borderRadius: BorderRadius.circular(12),
+                  GestureDetector(
+                    onTap: () => _registrarPorVoz(context),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 16,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A2A5E),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.white12,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.mic,
+                              color: Colors.amberAccent,
+                              size: 22,
+                            ),
                           ),
-                          child: const Icon(
-                            Icons.mic,
-                            color: Colors.amberAccent,
-                            size: 22,
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Registrar por Voz',
-                                style: GoogleFonts.montserrat(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 15,
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Registrar por Voz',
+                                  style: GoogleFonts.montserrat(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 15,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                '"Vendí 50 Café Volcán en efectivo"',
-                                style: GoogleFonts.montserrat(
-                                  color: Colors.white54,
-                                  fontSize: 12,
-                                  fontStyle: FontStyle.italic,
+                                const SizedBox(height: 2),
+                                Text(
+                                  '"Vendí 50 Café Volcán en efectivo"',
+                                  style: GoogleFonts.montserrat(
+                                    color: Colors.white54,
+                                    fontSize: 12,
+                                    fontStyle: FontStyle.italic,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                          const Icon(
+                            Icons.arrow_forward_ios,
+                            color: Colors.white38,
+                            size: 16,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -187,7 +317,7 @@ class DashboardPage extends StatelessWidget {
                           borderColor: const Color(0xFF4CAF50),
                           title: 'Ingresos',
                           subtitle: 'Ventas y abonos',
-                          value: '\$45.3M',
+                          value: _cargando ? '...' : _formatearCompacto(_ingresosTotal),
                           valueColor: const Color(0xFF4CAF50),
                         ),
                       ),
@@ -199,7 +329,7 @@ class DashboardPage extends StatelessWidget {
                           borderColor: const Color(0xFF3366FF),
                           title: 'Compras',
                           subtitle: 'Proveedores',
-                          value: '\$22.3M',
+                          value: '\$0',
                           valueColor: const Color(0xFF3366FF),
                         ),
                       ),
@@ -215,7 +345,7 @@ class DashboardPage extends StatelessWidget {
                           borderColor: const Color(0xFFEF5350),
                           title: 'Gastos',
                           subtitle: 'Operativos',
-                          value: '\$4.9M',
+                          value: '\$0',
                           valueColor: const Color(0xFFEF5350),
                         ),
                       ),
@@ -229,7 +359,7 @@ class DashboardPage extends StatelessWidget {
                           subtitle: 'Control stock',
                           value: '',
                           valueColor: Colors.transparent,
-                          badge: '2 bajos',
+                          badge: _cargando ? '...' : '$_productosBajoStock bajos',
                           badgeColor: const Color(0xFFFF9800),
                         ),
                       ),

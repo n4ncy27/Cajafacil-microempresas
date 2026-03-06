@@ -58,15 +58,22 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
+  final GlobalKey<DashboardPageState> _dashboardKey = GlobalKey<DashboardPageState>();
 
-  final List<Widget> _pages = const [
-    DashboardPage(),
-    IngresosPage(),
-    ComprasPage(),
-    GastosPage(),
-    InventarioPage(),
-    ReportesPage(),
-  ];
+  late final List<Widget> _pages;
+
+  @override
+  void initState() {
+    super.initState();
+    _pages = [
+      DashboardPage(key: _dashboardKey),
+      const IngresosPage(),
+      const ComprasPage(),
+      const GastosPage(),
+      const InventarioPage(),
+      const ReportesPage(),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -74,7 +81,12 @@ class _HomeScreenState extends State<HomeScreen> {
       body: _pages[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
-        onTap: (index) => setState(() => _currentIndex = index),
+        onTap: (index) {
+          setState(() => _currentIndex = index);
+          if (index == 0) {
+            _dashboardKey.currentState?.cargarDatos();
+          }
+        },
         type: BottomNavigationBarType.fixed,
         selectedItemColor: const Color(0xFF3366FF),
         unselectedItemColor: Colors.grey,

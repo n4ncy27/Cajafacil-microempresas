@@ -1,8 +1,50 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../widgets/voice_listening_modal.dart';
+import '../services/voice_parser.dart';
 
 class GastosPage extends StatelessWidget {
   const GastosPage({super.key});
+
+  String _formatearPesos(double valor) {
+    final str = valor.toStringAsFixed(0);
+    final buffer = StringBuffer();
+    int contador = 0;
+    for (int i = str.length - 1; i >= 0; i--) {
+      if (contador > 0 && contador % 3 == 0) buffer.write('.');
+      buffer.write(str[i]);
+      contador++;
+    }
+    return '\$${buffer.toString().split('').reversed.join()}';
+  }
+
+  Future<void> _registrarPorVoz(BuildContext context) async {
+    final texto = await VoiceListeningModal.show(
+      context,
+      titulo: 'Dicta tu gasto',
+      ejemplo: '"Pagué 150000 de arriendo"',
+      color: const Color(0xFFEF5350),
+    );
+    if (texto == null || texto.isEmpty) return;
+
+    final parser = VoiceParser();
+    final resultado = parser.parsearGastoCompra(texto);
+
+    if (!context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          resultado.isValid
+              ? 'Gasto detectado: ${resultado.descripcion} por ${_formatearPesos(resultado.monto!)}'
+              : 'Texto reconocido: "$texto" — Módulo de gastos próximamente',
+          style: GoogleFonts.montserrat(fontSize: 13),
+        ),
+        backgroundColor: resultado.isValid ? Colors.green : Colors.red.shade300,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -17,10 +59,30 @@ class GastosPage extends StatelessWidget {
         foregroundColor: Colors.white,
       ),
       body: Center(
-        child: Text(
-          'Gastos',
-          style: GoogleFonts.montserrat(fontSize: 22, color: Colors.grey),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.arrow_downward, size: 64, color: Colors.grey.shade400),
+            const SizedBox(height: 12),
+            Text(
+              'Módulo de gastos\npróximamente',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.montserrat(fontSize: 15, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Puedes registrar por voz con el botón del micrófono',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.montserrat(fontSize: 12, color: Colors.grey.shade400),
+            ),
+          ],
         ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'voice_gastos',
+        onPressed: () => _registrarPorVoz(context),
+        backgroundColor: const Color(0xFF1A2A5E),
+        child: const Icon(Icons.mic, color: Colors.amberAccent),
       ),
     );
   }

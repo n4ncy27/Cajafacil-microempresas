@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../database/database_helper.dart';
+import '../widgets/voice_listening_modal.dart';
+import '../services/voice_parser.dart';
 
 class IngresosPage extends StatefulWidget {
   const IngresosPage({super.key});
@@ -240,6 +242,181 @@ class _IngresosPageState extends State<IngresosPage>
     );
   }
 
+  Future<void> _registrarPorVoz() async {
+    final texto = await VoiceListeningModal.show(
+      context,
+      titulo: 'Dicta tu venta',
+      ejemplo: '"Vendí 2 Café Volcán en efectivo"',
+      color: const Color(0xFF3366FF),
+    );
+    if (texto == null || texto.isEmpty || !mounted) return;
+
+    final parser = VoiceParser();
+    final resultado = await parser.parsearVenta(texto);
+
+    if (!mounted) return;
+
+    if (!resultado.hasItems) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se encontraron productos en: "$texto"',
+              style: GoogleFonts.montserrat(fontSize: 13)),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    _mostrarConfirmacionVoz(resultado);
+  }
+
+  void _mostrarConfirmacionVoz(VoiceParseResult resultado) {
+    String formaPagoSeleccionada = resultado.formaPago ?? 'Efectivo';
+    final clienteCtrl = TextEditingController(text: resultado.cliente ?? '');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final total = resultado.items.fold<double>(0, (s, i) => s + i.subtotal);
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                const Icon(Icons.mic, color: Color(0xFF3366FF), size: 22),
+                const SizedBox(width: 8),
+                Text('Confirmar venta por voz',
+                    style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.w700, fontSize: 15)),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('"${resultado.rawText}"',
+                        style: GoogleFonts.montserrat(
+                            fontSize: 12, fontStyle: FontStyle.italic, color: Colors.grey.shade600)),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('Productos:',
+                      style: GoogleFonts.montserrat(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  ...resultado.items.map((item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text('${item.nombre} x${item.cantidad}',
+                              style: GoogleFonts.montserrat(fontSize: 13)),
+                        ),
+                        Text(_formatearPesos(item.subtotal),
+                            style: GoogleFonts.montserrat(
+                                fontWeight: FontWeight.w600, fontSize: 13)),
+                      ],
+                    ),
+                  )),
+                  const Divider(height: 16),
+                  Text('Forma de pago:',
+                      style: GoogleFonts.montserrat(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    children: ['Efectivo', 'Crédito', 'Transferencia', 'Tarjeta']
+                        .map((fp) => ChoiceChip(
+                              label: Text(fp,
+                                  style: GoogleFonts.montserrat(fontSize: 11)),
+                              selected: formaPagoSeleccionada == fp,
+                              selectedColor: const Color(0xFF3366FF).withValues(alpha: 0.2),
+                              onSelected: (_) =>
+                                  setDialogState(() => formaPagoSeleccionada = fp),
+                            ))
+                        .toList(),
+                  ),
+                  if (formaPagoSeleccionada == 'Crédito') ...[
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: clienteCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'Cliente',
+                        labelStyle: GoogleFonts.montserrat(fontSize: 13),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        isDense: true,
+                      ),
+                    ),
+                  ],
+                  const Divider(height: 16),
+                  Row(
+                    children: [
+                      Text('TOTAL',
+                          style: GoogleFonts.montserrat(fontWeight: FontWeight.w700)),
+                      const Spacer(),
+                      Text(_formatearPesos(total),
+                          style: GoogleFonts.montserrat(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 18,
+                              color: const Color(0xFF3366FF))),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Cancelar', style: GoogleFonts.montserrat()),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF3366FF),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () async {
+                  final items = resultado.items.map((i) => i.toMap()).toList();
+                  await _db.registrarVenta(
+                    formaPago: formaPagoSeleccionada,
+                    tipo: formaPagoSeleccionada == 'Crédito' ? 'crédito' : 'contado',
+                    items: items,
+                    cliente: clienteCtrl.text.isNotEmpty ? clienteCtrl.text : null,
+                  );
+                  if (mounted) {
+                    Navigator.pop(ctx);
+                    _cargarVentas();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Venta registrada por voz',
+                            style: GoogleFonts.montserrat(fontSize: 13)),
+                        backgroundColor: Colors.green,
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.check, color: Colors.white, size: 18),
+                label: Text('Confirmar',
+                    style: GoogleFonts.montserrat(
+                        color: Colors.white, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -262,13 +439,26 @@ class _IngresosPageState extends State<IngresosPage>
         controller: _tabController,
         children: [_vistaVentas(), _vistaAbonos()],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _abrirSeleccionProductos,
-        backgroundColor: const Color(0xFF3366FF),
-        icon: const Icon(Icons.add_shopping_cart, color: Colors.white),
-        label: Text('Nueva venta',
-            style: GoogleFonts.montserrat(
-                color: Colors.white, fontWeight: FontWeight.w600)),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton(
+            heroTag: 'voice_ingresos',
+            onPressed: _registrarPorVoz,
+            backgroundColor: const Color(0xFF1A2A5E),
+            child: const Icon(Icons.mic, color: Colors.amberAccent),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            heroTag: 'nueva_venta',
+            onPressed: _abrirSeleccionProductos,
+            backgroundColor: const Color(0xFF3366FF),
+            icon: const Icon(Icons.add_shopping_cart, color: Colors.white),
+            label: Text('Nueva venta',
+                style: GoogleFonts.montserrat(
+                    color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        ],
       ),
     );
   }

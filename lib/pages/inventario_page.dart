@@ -118,7 +118,7 @@ class _InventarioPageState extends State<InventarioPage> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          _formatearId(producto!['id']),
+                          _formatearId(producto['id']),
                           style: GoogleFonts.montserrat(
                             fontSize: 13, fontWeight: FontWeight.w600,
                             color: const Color(0xFF3366FF),
@@ -252,7 +252,7 @@ class _InventarioPageState extends State<InventarioPage> {
                           'fecha_vencimiento': fechaStr,
                         };
                         if (esEdicion) {
-                          await _db.actualizarProducto(producto!['id'], data);
+                          await _db.actualizarProducto(producto['id'], data);
                         } else {
                           await _db.insertarProducto(data);
                         }
