@@ -19,7 +19,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -98,6 +98,33 @@ class DatabaseHelper {
         observacion TEXT,
         FOREIGN KEY (venta_id) REFERENCES ventas (id) ON DELETE SET NULL,
         FOREIGN KEY (cliente_id) REFERENCES clientes (id)
+      )
+    ''');
+
+    // ── Gastos ──────────────────────────────────────────────────────────────
+    await db.execute('''
+      CREATE TABLE gastos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        descripcion TEXT NOT NULL,
+        categoria TEXT NOT NULL,
+        valor REAL NOT NULL,
+        forma_pago TEXT NOT NULL,
+        tipo TEXT NOT NULL DEFAULT 'contado',
+        saldo_pendiente REAL NOT NULL DEFAULT 0,
+        fecha TEXT NOT NULL,
+        fecha_registro TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE pagos_gastos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gasto_id INTEGER NOT NULL,
+        monto REAL NOT NULL,
+        forma_pago TEXT NOT NULL,
+        fecha TEXT NOT NULL,
+        observacion TEXT,
+        FOREIGN KEY (gasto_id) REFERENCES gastos (id) ON DELETE CASCADE
       )
     ''');
 
@@ -185,6 +212,33 @@ class DatabaseHelper {
         SELECT venta_id, cliente, monto, fecha, observacion FROM abonos_old
       ''');
       await db.execute('DROP TABLE abonos_old');
+    }
+
+    if (oldVersion < 4) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS gastos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          descripcion TEXT NOT NULL,
+          categoria TEXT NOT NULL,
+          valor REAL NOT NULL,
+          forma_pago TEXT NOT NULL,
+          tipo TEXT NOT NULL DEFAULT 'contado',
+          saldo_pendiente REAL NOT NULL DEFAULT 0,
+          fecha TEXT NOT NULL,
+          fecha_registro TEXT NOT NULL
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS pagos_gastos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          gasto_id INTEGER NOT NULL,
+          monto REAL NOT NULL,
+          forma_pago TEXT NOT NULL,
+          fecha TEXT NOT NULL,
+          observacion TEXT,
+          FOREIGN KEY (gasto_id) REFERENCES gastos (id) ON DELETE CASCADE
+        )
+      ''');
     }
   }
 
@@ -480,5 +534,65 @@ class DatabaseHelper {
         where: 'cliente_id = ?',
         whereArgs: [clienteId],
         orderBy: 'fecha DESC');
+  }
+
+  // ── GASTOS ─────────────────────────────────────────────────────────────────
+
+  Future<int> insertarGasto(Map<String, dynamic> gasto) async {
+    final db = await database;
+    gasto['fecha_registro'] = DateTime.now().toIso8601String();
+    gasto.putIfAbsent('saldo_pendiente',
+        () => gasto['tipo'] == 'crédito' ? gasto['valor'] : 0.0);
+    return await db.insert('gastos', gasto);
+  }
+
+  Future<List<Map<String, dynamic>>> obtenerGastos() async {
+    final db = await database;
+    return await db.query('gastos', orderBy: 'fecha DESC');
+  }
+
+  Future<List<Map<String, dynamic>>> obtenerGastosPorPeriodo(
+      String desde, String hasta) async {
+    final db = await database;
+    return await db.rawQuery(
+      'SELECT * FROM gastos WHERE fecha BETWEEN ? AND ? ORDER BY fecha DESC',
+      [desde, hasta],
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> obtenerGastosPendientes() async {
+    final db = await database;
+    return await db.query(
+      'gastos',
+      where: 'saldo_pendiente > 0',
+      orderBy: 'fecha ASC',
+    );
+  }
+
+  Future<void> registrarPagoGasto({
+    required int gastoId,
+    required double monto,
+    required String formaPago,
+    String? observacion,
+  }) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.insert('pagos_gastos', {
+        'gasto_id': gastoId,
+        'monto': monto,
+        'forma_pago': formaPago,
+        'fecha': DateTime.now().toIso8601String(),
+        if (observacion != null) 'observacion': observacion,
+      });
+      await txn.rawUpdate(
+        'UPDATE gastos SET saldo_pendiente = MAX(0, saldo_pendiente - ?) WHERE id = ?',
+        [monto, gastoId],
+      );
+    });
+  }
+
+  Future<int> eliminarGasto(int id) async {
+    final db = await database;
+    return await db.delete('gastos', where: 'id = ?', whereArgs: [id]);
   }
 }
