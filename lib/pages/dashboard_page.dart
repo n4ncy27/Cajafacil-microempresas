@@ -18,6 +18,7 @@ class DashboardPageState extends State<DashboardPage> {
   double _ingresosTotal = 0;
   int _ventasHoyCount = 0;
   int _productosBajoStock = 0;
+  double _comprasTotal = 0;
   bool _cargando = true;
 
   @override
@@ -29,6 +30,7 @@ class DashboardPageState extends State<DashboardPage> {
   Future<void> cargarDatos() async {
     final ventas = await _db.obtenerVentas();
     final bajoStock = await _db.obtenerProductosBajoStock();
+    final comprasTotal = await _db.obtenerTotalComprasAcumulado();
 
     final hoy = DateTime.now();
     final ventasHoy = ventas.where((v) {
@@ -47,6 +49,7 @@ class DashboardPageState extends State<DashboardPage> {
         _ingresosTotal = ingresosTotal;
         _ventasHoyCount = ventasHoy.length;
         _productosBajoStock = bajoStock.length;
+        _comprasTotal = comprasTotal;
         _cargando = false;
       });
     }
@@ -228,7 +231,7 @@ class DashboardPageState extends State<DashboardPage> {
                           ),
                           const SizedBox(width: 10),
                           _buildBadge(
-                            '${_ventasHoyCount} ventas hoy',
+                            '$_ventasHoyCount ventas hoy',
                             const Color(0xFFFFFFFF),
                           ),
                         ],
@@ -329,7 +332,7 @@ class DashboardPageState extends State<DashboardPage> {
                           borderColor: const Color(0xFF3366FF),
                           title: 'Compras',
                           subtitle: 'Proveedores',
-                          value: '\$0',
+                          value: _cargando ? '...' : _formatearCompacto(_comprasTotal),
                           valueColor: const Color(0xFF3366FF),
                         ),
                       ),

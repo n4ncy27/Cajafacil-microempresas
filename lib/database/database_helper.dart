@@ -686,4 +686,155 @@ class DatabaseHelper {
       'total_credito':  (r['total_credito']  as num?)?.toDouble() ?? 0,
     };
   }
+
+  // ── REPORTES ───────────────────────────────────────────────────────────────
+
+  /// Flujo de Caja: ingresos en efectivo, compras en efectivo, gastos en efectivo
+  Future<Map<String, double>> obtenerFlujoCaja(String filtro) async {
+    final db = await database;
+    final ahora = DateTime.now();
+
+    DateTime inicio;
+    if (filtro == 'Hoy') {
+      inicio = DateTime(ahora.year, ahora.month, ahora.day);
+    } else if (filtro == 'Semana') {
+      inicio = ahora.subtract(Duration(days: ahora.weekday - 1));
+      inicio = DateTime(inicio.year, inicio.month, inicio.day);
+    } else {
+      inicio = DateTime(ahora.year, ahora.month, 1);
+    }
+    final desde = inicio.toIso8601String();
+
+    // Ingresos en efectivo (ventas con forma_pago Efectivo)
+    final ingRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(total), 0) AS total
+      FROM ventas
+      WHERE fecha >= ? AND LOWER(forma_pago) = 'efectivo'
+    ''', [desde]);
+    final ingresosEfectivo = (ingRows.first['total'] as num?)?.toDouble() ?? 0;
+
+    // Compras pagadas en efectivo
+    final compRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(total), 0) AS total
+      FROM compras
+      WHERE fecha >= ? AND LOWER(forma_pago) = 'efectivo'
+    ''', [desde]);
+    final comprasEfectivo = (compRows.first['total'] as num?)?.toDouble() ?? 0;
+
+    // Pagos a proveedor en efectivo (de compras a crédito pagadas en efectivo)
+    final pagoProvRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(monto), 0) AS total
+      FROM pagos_proveedor
+      WHERE fecha >= ? AND LOWER(forma_pago) = 'efectivo'
+    ''', [desde]);
+    final pagosProvEfectivo = (pagoProvRows.first['total'] as num?)?.toDouble() ?? 0;
+
+    final totalComprasEfectivo = comprasEfectivo + pagosProvEfectivo;
+
+    return {
+      'ingresos_efectivo': ingresosEfectivo,
+      'compras_efectivo': totalComprasEfectivo,
+      'gastos_efectivo': 0, // Módulo gastos pendiente
+      'total_caja': ingresosEfectivo - totalComprasEfectivo,
+    };
+  }
+
+  /// Cuentas por Cobrar: ventas a crédito no pagadas totalmente
+  Future<List<Map<String, dynamic>>> obtenerCuentasPorCobrar() async {
+    final db = await database;
+    // Ventas a crédito con la suma de abonos
+    final rows = await db.rawQuery('''
+      SELECT
+        v.id,
+        v.cliente,
+        v.total,
+        v.fecha,
+        COALESCE(SUM(a.monto), 0) AS total_abonado
+      FROM ventas v
+      LEFT JOIN abonos a ON a.venta_id = v.id
+      WHERE LOWER(v.tipo) = 'crédito'
+      GROUP BY v.id
+      HAVING v.total - COALESCE(SUM(a.monto), 0) > 0
+      ORDER BY v.fecha DESC
+    ''');
+
+    return rows.map((r) {
+      final total = (r['total'] as num).toDouble();
+      final abonado = (r['total_abonado'] as num).toDouble();
+      return {
+        ...r,
+        'saldo_pendiente': total - abonado,
+      };
+    }).toList();
+  }
+
+  /// Cuentas por Pagar: compras a crédito no pagadas
+  Future<List<Map<String, dynamic>>> obtenerCuentasPorPagar() async {
+    final db = await database;
+    return await db.query(
+      'compras',
+      where: "LOWER(forma_pago) = 'crédito' AND pagada = 0",
+      orderBy: 'fecha DESC',
+    );
+  }
+
+  /// Estado de Resultado: ingresos, costos, gastos en un período
+  Future<Map<String, double>> obtenerEstadoResultado(String filtro) async {
+    final db = await database;
+    final ahora = DateTime.now();
+
+    DateTime inicio;
+    if (filtro == 'Hoy') {
+      inicio = DateTime(ahora.year, ahora.month, ahora.day);
+    } else if (filtro == 'Mes') {
+      inicio = DateTime(ahora.year, ahora.month, 1);
+    } else {
+      // Año
+      inicio = DateTime(ahora.year, 1, 1);
+    }
+    final desde = inicio.toIso8601String();
+
+    // Total ingresos (todas las ventas: contado + crédito)
+    final ingRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(total), 0) AS total FROM ventas WHERE fecha >= ?
+    ''', [desde]);
+    final totalIngresos = (ingRows.first['total'] as num?)?.toDouble() ?? 0;
+
+    // Total costos (compras)
+    final costoRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(total), 0) AS total FROM compras WHERE fecha >= ?
+    ''', [desde]);
+    final totalCostos = (costoRows.first['total'] as num?)?.toDouble() ?? 0;
+
+    // Gastos operativos (módulo pendiente, por ahora 0)
+    final totalGastos = 0.0;
+
+    return {
+      'total_ingresos': totalIngresos,
+      'total_costos': totalCostos,
+      'total_gastos': totalGastos,
+      'utilidad': totalIngresos - totalCostos - totalGastos,
+    };
+  }
+
+  /// Total general de compras (para dashboard)
+  Future<double> obtenerTotalComprasHoy() async {
+    final db = await database;
+    final hoy = DateTime.now();
+    final inicio = DateTime(hoy.year, hoy.month, hoy.day).toIso8601String();
+    final rows = await db.rawQuery('''
+      SELECT COALESCE(SUM(total), 0) AS total
+      FROM compras WHERE fecha >= ?
+    ''', [inicio]);
+    return (rows.first['total'] as num?)?.toDouble() ?? 0;
+  }
+
+  /// Total acumulado de compras
+  Future<double> obtenerTotalComprasAcumulado() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+      'SELECT COALESCE(SUM(total), 0) AS total FROM compras',
+    );
+    return (rows.first['total'] as num?)?.toDouble() ?? 0;
+  }
 }

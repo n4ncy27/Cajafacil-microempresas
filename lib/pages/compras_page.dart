@@ -161,20 +161,39 @@ class _ComprasPageState extends State<ComprasPage> {
     );
     if (texto == null || texto.isEmpty) return;
 
+    // Usar parsearVenta para matchear productos del inventario
     final parser = VoiceParser();
-    final resultado = parser.parsearGastoCompra(texto);
+    final resultado = await parser.parsearVenta(texto);
 
     if (!mounted) return;
 
-    // Si el parser detectó datos suficientes, pre-rellenar el formulario
-    if (resultado.isValid) {
+    if (resultado.hasItems) {
+      final item = resultado.items.first;
+      // Buscar precio en el texto (número grande que no sea la cantidad)
+      double? precioDetectado;
+      final regPrecio = RegExp(r'(\d[\d.]*)\s*(?:pesos|mil|$|\s)');
+      final matches = regPrecio.allMatches(texto.toLowerCase());
+      for (final m in matches) {
+        final val = double.tryParse(m.group(1)!.replaceAll('.', ''));
+        if (val != null && val > item.cantidad && val != item.cantidad.toDouble()) {
+          precioDetectado = val;
+          // Si dice "mil" después, multiplicar
+          final despues = texto.toLowerCase().substring(m.end).trim();
+          if (despues.startsWith('mil')) {
+            precioDetectado = precioDetectado! * 1000;
+          }
+        }
+      }
+
       _abrirNuevaCompra(prerellenado: {
-        'descripcion': resultado.descripcion,
-        'monto': resultado.monto,
-        'rawText': resultado.rawText,
+        'productoId': item.productoId,
+        'cantidad': item.cantidad,
+        'precio': precioDetectado,
+        'formaPago': resultado.formaPago,
+        'rawText': texto,
       });
     } else {
-      // Abrir igual para que el usuario complete manualmente
+      // No se detectó producto, abrir vacío
       _abrirNuevaCompra(prerellenado: {'rawText': texto});
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -787,19 +806,40 @@ class _NuevaCompraSheetState extends State<_NuevaCompraSheet> {
   @override
   void initState() {
     super.initState();
-    _cargarProductos();
-
-    // Pre-rellenar desde voz si aplica
-    final pre = widget.prerellenado;
-    if (pre != null) {
-      if (pre['monto'] != null) {
-        _precioCtrl.text =
-            (pre['monto'] as double).toStringAsFixed(0);
+    _cargarProductos().then((_) {
+      // Pre-rellenar desde voz si aplica
+      final pre = widget.prerellenado;
+      if (pre != null) {
+        if (pre['productoId'] != null) {
+          setState(() {
+            _productoSeleccionadoId = pre['productoId'] as int;
+          });
+        }
+        if (pre['cantidad'] != null) {
+          _cantidadCtrl.text = (pre['cantidad'] as int).toString();
+        }
+        if (pre['precio'] != null) {
+          _precioCtrl.text = (pre['precio'] as double).toStringAsFixed(0);
+        } else if (_productoSeleccionadoId != null) {
+          // Usar precio_compra del producto seleccionado
+          final p = _productoSeleccionado;
+          if (p != null && p.isNotEmpty) {
+            final pc = (p['precio_compra'] as num).toDouble();
+            if (pc > 0) _precioCtrl.text = pc.toStringAsFixed(0);
+          }
+        }
+        if (pre['formaPago'] != null) {
+          setState(() => _formaPago = pre['formaPago'] as String);
+        }
+        if (pre['monto'] != null && pre['productoId'] == null) {
+          _precioCtrl.text = (pre['monto'] as double).toStringAsFixed(0);
+        }
+        if (pre['descripcion'] != null && pre['productoId'] == null) {
+          _proveedorCtrl.text = pre['descripcion'] as String;
+        }
+        setState(() {});
       }
-      if (pre['descripcion'] != null) {
-        _proveedorCtrl.text = pre['descripcion'] as String;
-      }
-    }
+    });
   }
 
   @override
@@ -933,16 +973,50 @@ class _NuevaCompraSheetState extends State<_NuevaCompraSheet> {
                 const Spacer(),
                 // Botón voz desde el sheet
                 _BotonVoz(
-                  onTextoReconocido: (texto) {
+                  onTextoReconocido: (texto) async {
                     final parser = VoiceParser();
-                    final res = parser.parsearGastoCompra(texto);
-                    if (res.monto != null) {
-                      _precioCtrl.text = res.monto!.toStringAsFixed(0);
+                    final resultado = await parser.parsearVenta(texto);
+                    if (resultado.hasItems) {
+                      final item = resultado.items.first;
+                      setState(() {
+                        _productoSeleccionadoId = item.productoId;
+                        _cantidadCtrl.text = item.cantidad.toString();
+                        // Buscar precio en texto
+                        final regPrecio = RegExp(r'(\d[\d.]*)\s*(?:pesos|mil|$|\s)');
+                        final matches = regPrecio.allMatches(texto.toLowerCase());
+                        for (final m in matches) {
+                          final val = double.tryParse(m.group(1)!.replaceAll('.', ''));
+                          if (val != null && val > item.cantidad) {
+                            var precio = val;
+                            final despues = texto.toLowerCase().substring(m.end).trim();
+                            if (despues.startsWith('mil')) precio *= 1000;
+                            _precioCtrl.text = precio.toStringAsFixed(0);
+                            break;
+                          }
+                        }
+                        // Si no detectó precio, usar precio_compra del producto
+                        if (_precioCtrl.text.isEmpty) {
+                          final p = _productoSeleccionado;
+                          if (p != null && p.isNotEmpty) {
+                            final pc = (p['precio_compra'] as num).toDouble();
+                            if (pc > 0) _precioCtrl.text = pc.toStringAsFixed(0);
+                          }
+                        }
+                        if (resultado.formaPago != null) {
+                          _formaPago = resultado.formaPago!;
+                        }
+                      });
+                    } else {
+                      final res = parser.parsearGastoCompra(texto);
+                      setState(() {
+                        if (res.monto != null) {
+                          _precioCtrl.text = res.monto!.toStringAsFixed(0);
+                        }
+                        if (res.descripcion != null) {
+                          _proveedorCtrl.text = res.descripcion!;
+                        }
+                      });
                     }
-                    if (res.descripcion != null) {
-                      _proveedorCtrl.text = res.descripcion!;
-                    }
-                    setState(() {});
                   },
                 ),
               ],
