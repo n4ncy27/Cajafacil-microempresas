@@ -19,7 +19,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -98,6 +98,38 @@ class DatabaseHelper {
         observacion TEXT,
         FOREIGN KEY (venta_id) REFERENCES ventas (id) ON DELETE SET NULL,
         FOREIGN KEY (cliente_id) REFERENCES clientes (id)
+      )
+    ''');
+
+    // ── Compras ─────────────────────────────────────────────────────────────
+    await db.execute('''
+      CREATE TABLE compras (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        proveedor        TEXT    NOT NULL,
+        producto_id      INTEGER,
+        codigo_producto  TEXT    NOT NULL,
+        nombre_producto  TEXT    NOT NULL,
+        cantidad         INTEGER NOT NULL,
+        precio_unitario  REAL    NOT NULL,
+        total            REAL    NOT NULL,
+        forma_pago       TEXT    NOT NULL,
+        fecha            TEXT    NOT NULL,
+        pagada           INTEGER NOT NULL DEFAULT 0,
+        fecha_pago       TEXT,
+        forma_pago_pago  TEXT,
+        FOREIGN KEY (producto_id) REFERENCES inventario (id)
+      )
+    ''');
+
+    // ── Pagos a proveedor ────────────────────────────────────────────────────
+    await db.execute('''
+      CREATE TABLE pagos_proveedor (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        compra_id  INTEGER NOT NULL,
+        monto      REAL    NOT NULL,
+        fecha      TEXT    NOT NULL,
+        forma_pago TEXT    NOT NULL,
+        FOREIGN KEY (compra_id) REFERENCES compras (id) ON DELETE CASCADE
       )
     ''');
 
@@ -185,6 +217,37 @@ class DatabaseHelper {
         SELECT venta_id, cliente, monto, fecha, observacion FROM abonos_old
       ''');
       await db.execute('DROP TABLE abonos_old');
+    }
+
+    if (oldVersion < 4) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS compras (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          proveedor        TEXT    NOT NULL,
+          producto_id      INTEGER,
+          codigo_producto  TEXT    NOT NULL,
+          nombre_producto  TEXT    NOT NULL,
+          cantidad         INTEGER NOT NULL,
+          precio_unitario  REAL    NOT NULL,
+          total            REAL    NOT NULL,
+          forma_pago       TEXT    NOT NULL,
+          fecha            TEXT    NOT NULL,
+          pagada           INTEGER NOT NULL DEFAULT 0,
+          fecha_pago       TEXT,
+          forma_pago_pago  TEXT,
+          FOREIGN KEY (producto_id) REFERENCES inventario (id)
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS pagos_proveedor (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          compra_id  INTEGER NOT NULL,
+          monto      REAL    NOT NULL,
+          fecha      TEXT    NOT NULL,
+          forma_pago TEXT    NOT NULL,
+          FOREIGN KEY (compra_id) REFERENCES compras (id) ON DELETE CASCADE
+        )
+      ''');
     }
   }
 
@@ -480,5 +543,147 @@ class DatabaseHelper {
         where: 'cliente_id = ?',
         whereArgs: [clienteId],
         orderBy: 'fecha DESC');
+  }
+
+  /// Registra una compra e incrementa el stock del producto en inventario.
+  /// Todo en una sola transacción para garantizar consistencia.
+  Future<int> registrarCompra({
+    required String proveedor,
+    required int productoId,
+    required String codigoProducto,
+    required String nombreProducto,
+    required int cantidad,
+    required double precioUnitario,
+    required double total,
+    required String formaPago,
+  }) async {
+    final db = await database;
+    return await db.transaction((txn) async {
+      // 1. Insertar la compra
+      final compraId = await txn.insert('compras', {
+        'proveedor':       proveedor,
+        'producto_id':     productoId,
+        'codigo_producto': codigoProducto,
+        'nombre_producto': nombreProducto,
+        'cantidad':        cantidad,
+        'precio_unitario': precioUnitario,
+        'total':           total,
+        'forma_pago':      formaPago,
+        'fecha':           DateTime.now().toIso8601String(),
+        'pagada':          formaPago.toLowerCase() == 'crédito' ? 0 : 1,
+      });
+
+      // 2. Aumentar stock en inventario
+      await txn.rawUpdate(
+        'UPDATE inventario SET cantidad = cantidad + ? WHERE id = ?',
+        [cantidad, productoId],
+      );
+
+      return compraId;
+    });
+  }
+
+  /// Obtiene compras filtradas por período (hoy / semana / mes).
+  Future<List<Map<String, dynamic>>> obtenerComprasFiltradas(
+      String filtro) async {
+    final db = await database;
+    final ahora = DateTime.now();
+
+    DateTime inicio;
+    if (filtro == 'Hoy') {
+      inicio = DateTime(ahora.year, ahora.month, ahora.day);
+    } else if (filtro == 'Semana') {
+      inicio = ahora.subtract(Duration(days: ahora.weekday - 1));
+      inicio = DateTime(inicio.year, inicio.month, inicio.day);
+    } else {
+      // Mes
+      inicio = DateTime(ahora.year, ahora.month, 1);
+    }
+
+    return await db.query(
+      'compras',
+      where: 'fecha >= ?',
+      whereArgs: [inicio.toIso8601String()],
+      orderBy: 'fecha DESC',
+    );
+  }
+
+  /// Devuelve las compras a crédito que aún no han sido pagadas.
+  Future<List<Map<String, dynamic>>> obtenerComprasPendientes() async {
+    final db = await database;
+    return await db.query(
+      'compras',
+      where: "forma_pago = 'Crédito' AND pagada = 0",
+      orderBy: 'fecha DESC',
+    );
+  }
+
+  /// Marca una compra como pagada y registra el pago en `pagos_proveedor`.
+  Future<void> registrarPagoProveedor({
+    required int compraId,
+    required DateTime fechaPago,
+    required String formaPago,
+  }) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      // 1. Obtener monto de la compra
+      final rows = await txn.query('compras',
+          columns: ['total'], where: 'id = ?', whereArgs: [compraId]);
+      if (rows.isEmpty) return;
+      final monto = (rows.first['total'] as num).toDouble();
+
+      // 2. Registrar en historial de pagos
+      await txn.insert('pagos_proveedor', {
+        'compra_id':  compraId,
+        'monto':      monto,
+        'fecha':      fechaPago.toIso8601String(),
+        'forma_pago': formaPago,
+      });
+
+      // 3. Marcar compra como pagada
+      await txn.update(
+        'compras',
+        {
+          'pagada':          1,
+          'fecha_pago':      fechaPago.toIso8601String(),
+          'forma_pago_pago': formaPago,
+        },
+        where: 'id = ?',
+        whereArgs: [compraId],
+      );
+    });
+  }
+
+  /// Devuelve el total de compras en un período dado (para reportes).
+  /// [desde] y [hasta] son ISO strings.
+  Future<Map<String, double>> resumenComprasPorPeriodo(
+      String desde, String hasta) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT
+        SUM(total)                                        AS total_general,
+        SUM(CASE WHEN forma_pago = 'Efectivo'   THEN total ELSE 0 END) AS total_efectivo,
+        SUM(CASE WHEN forma_pago IN ('Nequi','Transferencia')
+                                                THEN total ELSE 0 END) AS total_nequi,
+        SUM(CASE WHEN forma_pago = 'Crédito'    THEN total ELSE 0 END) AS total_credito
+      FROM compras
+      WHERE fecha BETWEEN ? AND ?
+    ''', [desde, hasta]);
+
+    if (rows.isEmpty) {
+      return {
+        'total_general': 0,
+        'total_efectivo': 0,
+        'total_nequi': 0,
+        'total_credito': 0,
+      };
+    }
+    final r = rows.first;
+    return {
+      'total_general':  (r['total_general']  as num?)?.toDouble() ?? 0,
+      'total_efectivo': (r['total_efectivo'] as num?)?.toDouble() ?? 0,
+      'total_nequi':    (r['total_nequi']    as num?)?.toDouble() ?? 0,
+      'total_credito':  (r['total_credito']  as num?)?.toDouble() ?? 0,
+    };
   }
 }
