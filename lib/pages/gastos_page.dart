@@ -632,7 +632,7 @@ class _NuevoGastoPageState extends State<_NuevoGastoPage> {
                   _gastoLabel('Categoría'),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
-                    value: _categoria,
+                    initialValue: _categoria,
                     decoration: _gastoInputDeco(),
                     items: _categorias
                         .map((c) => DropdownMenuItem(
@@ -970,7 +970,7 @@ class _PagoGastoPageState extends State<_PagoGastoPage> {
                       _gastoLabel('Seleccionar'),
                       const SizedBox(height: 6),
                       DropdownButtonFormField<Map<String, dynamic>>(
-                        value: _seleccionado,
+                        initialValue: _seleccionado,
                         decoration: _gastoInputDeco(),
                         items: _pendientes.map((g) {
                           final cat = g['categoria'] as String? ?? '';
