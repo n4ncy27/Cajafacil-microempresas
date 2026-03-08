@@ -44,19 +44,39 @@ class VoiceItem {
   };
 }
 
-/// Resultado parseado para gastos/compras
+/// Resultado parseado para gastos
 class VoiceExpenseResult {
   final String? descripcion;
+  final String? categoria;
   final double? monto;
+  final String? formaPago;
   final String? rawText;
 
-  VoiceExpenseResult({this.descripcion, this.monto, this.rawText});
-  bool get isValid => descripcion != null && monto != null;
+  VoiceExpenseResult({this.descripcion, this.categoria, this.monto, this.formaPago, this.rawText});
+  bool get isValid => categoria != null && monto != null;
 }
 
 /// Parser para interpretar texto hablado
 class VoiceParser {
   final DatabaseHelper _db = DatabaseHelper.instance;
+
+  /// Detecta la acción principal del texto: 'venta', 'compra', 'gasto' o null
+  static String? detectarAccion(String texto) {
+    final t = texto.toLowerCase();
+    if (t.contains('vendí') || t.contains('vendi') || t.contains('vender') ||
+        t.contains('venta') || t.contains('cobré') || t.contains('cobre')) {
+      return 'venta';
+    }
+    if (t.contains('compré') || t.contains('compre') || t.contains('comprar') ||
+        t.contains('compra')) {
+      return 'compra';
+    }
+    if (t.contains('gasté') || t.contains('gaste') || t.contains('pagué') ||
+        t.contains('pague') || t.contains('gasto')) {
+      return 'gasto';
+    }
+    return null;
+  }
 
   /// Convierte palabras numéricas a dígitos
   static int? _parsearNumero(String texto) {
@@ -145,13 +165,53 @@ class VoiceParser {
     );
   }
 
-  /// Parsea un comando de voz para gastos o compras.
+  /// Parsea un comando de voz para gastos.
   /// Ejemplo: "gasté 150000 en arriendo"
-  /// Ejemplo: "compré 50 cafés a 45000"
+  /// Ejemplo: "pagué 80000 de nómina en efectivo"
   VoiceExpenseResult parsearGastoCompra(String texto) {
     final t = texto.toLowerCase().trim();
+    final formaPago = _detectarFormaPago(t);
     double? monto;
-    String? descripcion;
+    String? categoria;
+
+    // Lista de categorías de gastos para matchear
+    const categorias = {
+      'arriendo': 'Arriendo',
+      'alquiler': 'Arriendo',
+      'renta': 'Arriendo',
+      'nómina': 'Nómina',
+      'nomina': 'Nómina',
+      'salario': 'Nómina',
+      'sueldo': 'Nómina',
+      'empleado': 'Nómina',
+      'seguridad social': 'Seguridad Social',
+      'salud': 'Seguridad Social',
+      'pensión': 'Seguridad Social',
+      'pension': 'Seguridad Social',
+      'eps': 'Seguridad Social',
+      'internet': 'Internet',
+      'wifi': 'Internet',
+      'agua': 'Agua',
+      'acueducto': 'Agua',
+      'luz': 'Luz',
+      'energía': 'Luz',
+      'energia': 'Luz',
+      'electricidad': 'Luz',
+      'vigilancia': 'Vigilancia',
+      'seguridad': 'Vigilancia',
+      'aseo': 'Útiles de Aseo',
+      'útiles de aseo': 'Útiles de Aseo',
+      'limpieza': 'Útiles de Aseo',
+    };
+
+    // Buscar categoría en el texto
+    for (final entry in categorias.entries) {
+      if (t.contains(entry.key)) {
+        categoria = entry.value;
+        break;
+      }
+    }
+    categoria ??= 'Otros';
 
     // Buscar monto numérico
     final regMonto = RegExp(r'(\d[\d.]*)\s*(?:pesos|mil|$|\s)');
@@ -159,31 +219,17 @@ class VoiceParser {
     if (matchMonto != null) {
       final valorStr = matchMonto.group(1)!.replaceAll('.', '');
       monto = double.tryParse(valorStr);
-      // Si dice "mil" después del número, multiplicar
       final despues = t.substring(matchMonto.end).trim();
       if (despues.startsWith('mil') && monto != null) {
         monto *= 1000;
       }
     }
 
-    // Buscar descripción después de "en" o "de" o "por"
-    final regDesc = RegExp(r'(?:en|de|por)\s+(.+?)(?:\s+a\s+|\s+por\s+|$)', caseSensitive: false);
-    final matchDesc = regDesc.firstMatch(t);
-    if (matchDesc != null) {
-      descripcion = matchDesc.group(1)?.trim();
-    }
-
-    // Si no encontramos descripción por patrón, usar todo el texto limpio
-    if (descripcion == null || descripcion.isEmpty) {
-      descripcion = t
-        .replaceAll(RegExp(r'\d[\d.]*'), '')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    }
-
     return VoiceExpenseResult(
-      descripcion: descripcion.isNotEmpty ? descripcion : null,
+      descripcion: categoria,
+      categoria: categoria,
       monto: monto,
+      formaPago: formaPago,
       rawText: texto,
     );
   }

@@ -274,14 +274,8 @@ class _IngresosPageState extends State<IngresosPage>
     );
   }
 
-  Future<void> _registrarPorVoz() async {
-    final texto = await VoiceListeningModal.show(
-      context,
-      titulo: 'Dicta tu venta',
-      ejemplo: '"Vendí 2 Café Volcán en efectivo"',
-      color: const Color(0xFF3366FF),
-    );
-    if (texto == null || texto.isEmpty || !mounted) return;
+  Future<void> _procesarVozVenta(String texto) async {
+    if (texto.isEmpty || !mounted) return;
 
     final parser = VoiceParser();
     final resultado = await parser.parsearVenta(texto);
@@ -474,11 +468,10 @@ class _IngresosPageState extends State<IngresosPage>
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          FloatingActionButton(
+          VoiceListeningModal.holdButton(
+            onResult: _procesarVozVenta,
             heroTag: 'voice_ingresos',
-            onPressed: _registrarPorVoz,
-            backgroundColor: const Color(0xFF1A2A5E),
-            child: const Icon(Icons.mic, color: Colors.amberAccent),
+            mini: true,
           ),
           const SizedBox(height: 12),
           FloatingActionButton.extended(
@@ -1333,7 +1326,9 @@ class _ModalConfirmacionState extends State<_ModalConfirmacion> {
                       ])),
                       Row(children: [
                         GestureDetector(
-                          onTap: () { if ((item['cantidad'] as int) > 1) { setState(() => _items[idx]['cantidad']--); _recalcular(idx); } else setState(() => _items.removeAt(idx)); },
+                          onTap: () { if ((item['cantidad'] as int) > 1) { setState(() => _items[idx]['cantidad']--); _recalcular(idx); } else {
+                            setState(() => _items.removeAt(idx));
+                          } },
                           child: Container(padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(8)),
                               child: const Icon(Icons.remove, size: 16)),

@@ -32,6 +32,10 @@ class _ReportesPageState extends State<ReportesPage> {
   Map<String, double> _estadoResultado = {};
   bool _cargandoEstado = true;
 
+  // ── Kardex ─────────────────────────────────────────────────────────────────
+  List<Map<String, dynamic>> _kardex = [];
+  bool _cargandoKardex = true;
+
   @override
   void initState() {
     super.initState();
@@ -44,6 +48,7 @@ class _ReportesPageState extends State<ReportesPage> {
       _cargarCuentasCobrar(),
       _cargarCuentasPagar(),
       _cargarEstadoResultado(),
+      _cargarKardex(),
     ]);
   }
 
@@ -70,6 +75,12 @@ class _ReportesPageState extends State<ReportesPage> {
     final data = await _db.obtenerEstadoResultado(
         _estadoResultadoFiltros[_estadoResultadoFiltro]);
     if (mounted) setState(() { _estadoResultado = data; _cargandoEstado = false; });
+  }
+
+  Future<void> _cargarKardex() async {
+    setState(() => _cargandoKardex = true);
+    final data = await _db.obtenerKardex();
+    if (mounted) setState(() { _kardex = data; _cargandoKardex = false; });
   }
 
   String _formatearPesos(double valor) {
@@ -140,6 +151,8 @@ class _ReportesPageState extends State<ReportesPage> {
                   _buildSeccionCuentasPagar(),
                   const SizedBox(height: 12),
                   _buildSeccionEstadoResultado(),
+                  const SizedBox(height: 12),
+                  _buildSeccionKardex(),
                   const SizedBox(height: 24),
                 ],
               ),
@@ -429,6 +442,166 @@ class _ReportesPageState extends State<ReportesPage> {
                   ),
                 ],
               ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  KARDEX
+  // ══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildSeccionKardex() {
+    final totalValor = _kardex.fold<double>(
+        0, (s, k) => s + ((k['valor_inventario'] as num?)?.toDouble() ?? 0));
+
+    return _SeccionExpandible(
+      titulo: 'KARDEX',
+      subtitulo: 'Movimiento y valorización del inventario',
+      icono: Icons.inventory_2_outlined,
+      colorIcono: const Color(0xFF00897B),
+      child: Column(
+        children: [
+          if (_cargandoKardex)
+            const Padding(
+              padding: EdgeInsets.all(20),
+              child: CircularProgressIndicator(),
+            )
+          else if (_kardex.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Icon(Icons.inventory_outlined, size: 40, color: Colors.grey.shade300),
+                  const SizedBox(height: 8),
+                  Text('Sin productos en inventario',
+                      style: GoogleFonts.montserrat(
+                          fontSize: 13, color: Colors.grey.shade500)),
+                ],
+              ),
+            )
+          else ...[
+            // Encabezado de tabla
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00897B).withOpacity(0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 28,
+                    child: Text('Cód',
+                        style: GoogleFonts.montserrat(
+                            fontSize: 10, fontWeight: FontWeight.w700, color: Colors.grey.shade700)),
+                  ),
+                  Expanded(
+                    flex: 3,
+                    child: Text('Producto',
+                        style: GoogleFonts.montserrat(
+                            fontSize: 10, fontWeight: FontWeight.w700, color: Colors.grey.shade700)),
+                  ),
+                  SizedBox(
+                    width: 36,
+                    child: Text('Ent',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.montserrat(
+                            fontSize: 10, fontWeight: FontWeight.w700, color: Colors.green.shade700)),
+                  ),
+                  SizedBox(
+                    width: 36,
+                    child: Text('Sal',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.montserrat(
+                            fontSize: 10, fontWeight: FontWeight.w700, color: Colors.red.shade600)),
+                  ),
+                  SizedBox(
+                    width: 34,
+                    child: Text('Stock',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.montserrat(
+                            fontSize: 10, fontWeight: FontWeight.w700, color: const Color(0xFF3366FF))),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Text('Valor',
+                        textAlign: TextAlign.end,
+                        style: GoogleFonts.montserrat(
+                            fontSize: 10, fontWeight: FontWeight.w700, color: Colors.grey.shade700)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+
+            // Filas de productos
+            ..._kardex.map((k) {
+              final codigo = k['codigo'] as String? ?? '';
+              final nombre = k['nombre'] as String? ?? '';
+              final entradas = (k['entradas'] as num?)?.toInt() ?? 0;
+              final salidas = (k['salidas'] as num?)?.toInt() ?? 0;
+              final stock = (k['stock'] as num?)?.toInt() ?? 0;
+              final valor = (k['valor_inventario'] as num?)?.toDouble() ?? 0;
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 28,
+                      child: Text(codigo,
+                          style: GoogleFonts.montserrat(
+                              fontSize: 10, color: Colors.grey.shade500)),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text(nombre,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.montserrat(
+                              fontSize: 11, fontWeight: FontWeight.w500)),
+                    ),
+                    SizedBox(
+                      width: 36,
+                      child: Text('$entradas',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.montserrat(
+                              fontSize: 12, fontWeight: FontWeight.w600, color: Colors.green.shade700)),
+                    ),
+                    SizedBox(
+                      width: 36,
+                      child: Text('$salidas',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.montserrat(
+                              fontSize: 12, fontWeight: FontWeight.w600, color: Colors.red.shade600)),
+                    ),
+                    SizedBox(
+                      width: 34,
+                      child: Text('$stock',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.montserrat(
+                              fontSize: 12, fontWeight: FontWeight.w700, color: const Color(0xFF3366FF))),
+                    ),
+                    Expanded(
+                      flex: 2,
+                      child: Text(_formatearPesos(valor),
+                          textAlign: TextAlign.end,
+                          style: GoogleFonts.montserrat(
+                              fontSize: 11, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ),
+              );
+            }),
+
+            const Divider(height: 20),
+            _filaTotalReporte(
+              '= Valor total inventario',
+              _formatearPesos(totalValor),
+              const Color(0xFF00897B),
+              bgColor: const Color(0xFF00897B).withOpacity(0.08),
             ),
           ],
         ],

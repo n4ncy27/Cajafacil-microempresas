@@ -19,7 +19,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -54,8 +54,6 @@ class DatabaseHelper {
     ''');
 
     // ── Ventas ──────────────────────────────────────────────────────────────
-    // Mantiene campo "cliente" (texto) para compatibilidad con voz
-    // Agrega "cliente_id" para ventas registradas desde el carrito
     await db.execute('''
       CREATE TABLE ventas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,7 +84,6 @@ class DatabaseHelper {
     ''');
 
     // ── Abonos ──────────────────────────────────────────────────────────────
-    // venta_id se mantiene para compatibilidad; cliente_id para el nuevo flujo
     await db.execute('''
       CREATE TABLE abonos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,6 +127,34 @@ class DatabaseHelper {
         fecha      TEXT    NOT NULL,
         forma_pago TEXT    NOT NULL,
         FOREIGN KEY (compra_id) REFERENCES compras (id) ON DELETE CASCADE
+      )
+    ''');
+
+    // ── Gastos ──────────────────────────────────────────────────────────────
+    await db.execute('''
+      CREATE TABLE gastos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        descripcion TEXT NOT NULL,
+        categoria TEXT NOT NULL,
+        valor REAL NOT NULL,
+        forma_pago TEXT NOT NULL,
+        tipo TEXT NOT NULL DEFAULT 'contado',
+        saldo_pendiente REAL NOT NULL DEFAULT 0,
+        fecha TEXT NOT NULL,
+        fecha_registro TEXT NOT NULL
+      )
+    ''');
+
+    // ── Pagos de gastos ─────────────────────────────────────────────────────
+    await db.execute('''
+      CREATE TABLE pagos_gastos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gasto_id INTEGER NOT NULL,
+        monto REAL NOT NULL,
+        forma_pago TEXT NOT NULL,
+        fecha TEXT NOT NULL,
+        observacion TEXT,
+        FOREIGN KEY (gasto_id) REFERENCES gastos (id) ON DELETE CASCADE
       )
     ''');
 
@@ -189,14 +214,14 @@ class DatabaseHelper {
         )
       ''');
 
-      // Agregar cliente_id a ventas (ALTER TABLE en SQLite solo permite ADD COLUMN)
+      // Agregar cliente_id a ventas
       try {
         await db.execute('ALTER TABLE ventas ADD COLUMN cliente_id INTEGER');
       } catch (_) {
         // Ya existe, ignorar
       }
 
-      // Recrear abonos con las columnas nuevas (cliente_id opcional, venta_id nullable)
+      // Recrear abonos con las columnas nuevas
       await db.execute('ALTER TABLE abonos RENAME TO abonos_old');
       await db.execute('''
         CREATE TABLE abonos (
@@ -246,6 +271,33 @@ class DatabaseHelper {
           fecha      TEXT    NOT NULL,
           forma_pago TEXT    NOT NULL,
           FOREIGN KEY (compra_id) REFERENCES compras (id) ON DELETE CASCADE
+        )
+      ''');
+    }
+
+    if (oldVersion < 5) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS gastos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          descripcion TEXT NOT NULL,
+          categoria TEXT NOT NULL,
+          valor REAL NOT NULL,
+          forma_pago TEXT NOT NULL,
+          tipo TEXT NOT NULL DEFAULT 'contado',
+          saldo_pendiente REAL NOT NULL DEFAULT 0,
+          fecha TEXT NOT NULL,
+          fecha_registro TEXT NOT NULL
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS pagos_gastos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          gasto_id INTEGER NOT NULL,
+          monto REAL NOT NULL,
+          forma_pago TEXT NOT NULL,
+          fecha TEXT NOT NULL,
+          observacion TEXT,
+          FOREIGN KEY (gasto_id) REFERENCES gastos (id) ON DELETE CASCADE
         )
       ''');
     }
@@ -357,7 +409,6 @@ class DatabaseHelper {
         orderBy: 'deuda_total DESC, nombre ASC');
   }
 
-  /// Clientes que tienen ventas a crédito, ordenados: pendientes primero (mayor deuda), cancelados al final
   Future<List<Map<String, dynamic>>> obtenerClientesCredito() async {
     final db = await database;
     return await db.rawQuery('''
@@ -376,13 +427,12 @@ class DatabaseHelper {
 
   // ── VENTAS ─────────────────────────────────────────────────────────────────
 
-  /// Registrar venta — compatible con voz (cliente como texto) y carrito (cliente_id)
   Future<int> registrarVenta({
     required String formaPago,
     required String tipo,
     required List<Map<String, dynamic>> items,
-    String? cliente,       // usado por la voz
-    int? clienteId,        // usado por el carrito con cliente registrado
+    String? cliente,
+    int? clienteId,
     String? observacion,
   }) async {
     final db = await database;
@@ -390,7 +440,6 @@ class DatabaseHelper {
       final double total =
           items.fold(0, (sum, i) => sum + (i['subtotal'] as double));
 
-      // Si viene clienteId, rellenar también el campo texto para que la lista lo muestre
       String? nombreCliente = cliente;
       if (clienteId != null && nombreCliente == null) {
         final rows = await txn
@@ -427,7 +476,6 @@ class DatabaseHelper {
         }
       }
 
-      // Sumar deuda solo si tiene cliente registrado
       if (tipo == 'crédito' && clienteId != null) {
         await txn.rawUpdate(
           'UPDATE clientes SET deuda_total = deuda_total + ? WHERE id = ?',
@@ -458,7 +506,6 @@ class DatabaseHelper {
       if (venta.isEmpty) return;
       final v = venta.first;
 
-      // Restaurar stock
       final detalles = await txn.query('detalle_ventas',
           where: 'venta_id = ?', whereArgs: [ventaId]);
       for (final d in detalles) {
@@ -470,7 +517,6 @@ class DatabaseHelper {
         }
       }
 
-      // Restaurar deuda si era crédito con cliente registrado
       if (v['tipo'] == 'crédito' && v['cliente_id'] != null) {
         await txn.rawUpdate(
           'UPDATE clientes SET deuda_total = MAX(0, deuda_total - ?) WHERE id = ?',
@@ -497,7 +543,6 @@ class DatabaseHelper {
 
   // ── ABONOS ─────────────────────────────────────────────────────────────────
 
-  /// Registrar abono por cliente registrado — reduce deuda_total
   Future<int> registrarAbonoCliente({
     required int clienteId,
     required String nombreCliente,
@@ -521,7 +566,6 @@ class DatabaseHelper {
     });
   }
 
-  /// Mantener compatibilidad con código existente (voz u otros usos)
   Future<int> registrarAbono(Map<String, dynamic> abono) async {
     final db = await database;
     abono['fecha'] = DateTime.now().toIso8601String();
@@ -545,8 +589,8 @@ class DatabaseHelper {
         orderBy: 'fecha DESC');
   }
 
-  /// Registra una compra e incrementa el stock del producto en inventario.
-  /// Todo en una sola transacción para garantizar consistencia.
+  // ── COMPRAS ────────────────────────────────────────────────────────────────
+
   Future<int> registrarCompra({
     required String proveedor,
     required int productoId,
@@ -559,7 +603,6 @@ class DatabaseHelper {
   }) async {
     final db = await database;
     return await db.transaction((txn) async {
-      // 1. Insertar la compra
       final compraId = await txn.insert('compras', {
         'proveedor':       proveedor,
         'producto_id':     productoId,
@@ -573,7 +616,6 @@ class DatabaseHelper {
         'pagada':          formaPago.toLowerCase() == 'crédito' ? 0 : 1,
       });
 
-      // 2. Aumentar stock en inventario
       await txn.rawUpdate(
         'UPDATE inventario SET cantidad = cantidad + ? WHERE id = ?',
         [cantidad, productoId],
@@ -583,7 +625,6 @@ class DatabaseHelper {
     });
   }
 
-  /// Obtiene compras filtradas por período (hoy / semana / mes).
   Future<List<Map<String, dynamic>>> obtenerComprasFiltradas(
       String filtro) async {
     final db = await database;
@@ -596,7 +637,6 @@ class DatabaseHelper {
       inicio = ahora.subtract(Duration(days: ahora.weekday - 1));
       inicio = DateTime(inicio.year, inicio.month, inicio.day);
     } else {
-      // Mes
       inicio = DateTime(ahora.year, ahora.month, 1);
     }
 
@@ -608,7 +648,6 @@ class DatabaseHelper {
     );
   }
 
-  /// Devuelve las compras a crédito que aún no han sido pagadas.
   Future<List<Map<String, dynamic>>> obtenerComprasPendientes() async {
     final db = await database;
     return await db.query(
@@ -618,7 +657,6 @@ class DatabaseHelper {
     );
   }
 
-  /// Marca una compra como pagada y registra el pago en `pagos_proveedor`.
   Future<void> registrarPagoProveedor({
     required int compraId,
     required DateTime fechaPago,
@@ -626,13 +664,11 @@ class DatabaseHelper {
   }) async {
     final db = await database;
     await db.transaction((txn) async {
-      // 1. Obtener monto de la compra
       final rows = await txn.query('compras',
           columns: ['total'], where: 'id = ?', whereArgs: [compraId]);
       if (rows.isEmpty) return;
       final monto = (rows.first['total'] as num).toDouble();
 
-      // 2. Registrar en historial de pagos
       await txn.insert('pagos_proveedor', {
         'compra_id':  compraId,
         'monto':      monto,
@@ -640,7 +676,6 @@ class DatabaseHelper {
         'forma_pago': formaPago,
       });
 
-      // 3. Marcar compra como pagada
       await txn.update(
         'compras',
         {
@@ -654,8 +689,6 @@ class DatabaseHelper {
     });
   }
 
-  /// Devuelve el total de compras en un período dado (para reportes).
-  /// [desde] y [hasta] son ISO strings.
   Future<Map<String, double>> resumenComprasPorPeriodo(
       String desde, String hasta) async {
     final db = await database;
@@ -687,9 +720,68 @@ class DatabaseHelper {
     };
   }
 
+  // ── GASTOS ─────────────────────────────────────────────────────────────────
+
+  Future<int> insertarGasto(Map<String, dynamic> gasto) async {
+    final db = await database;
+    gasto['fecha_registro'] = DateTime.now().toIso8601String();
+    gasto.putIfAbsent('saldo_pendiente',
+        () => gasto['tipo'] == 'crédito' ? gasto['valor'] : 0.0);
+    return await db.insert('gastos', gasto);
+  }
+
+  Future<List<Map<String, dynamic>>> obtenerGastos() async {
+    final db = await database;
+    return await db.query('gastos', orderBy: 'fecha DESC');
+  }
+
+  Future<List<Map<String, dynamic>>> obtenerGastosPorPeriodo(
+      String desde, String hasta) async {
+    final db = await database;
+    return await db.rawQuery(
+      'SELECT * FROM gastos WHERE fecha BETWEEN ? AND ? ORDER BY fecha DESC',
+      [desde, hasta],
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> obtenerGastosPendientes() async {
+    final db = await database;
+    return await db.query(
+      'gastos',
+      where: 'saldo_pendiente > 0',
+      orderBy: 'fecha ASC',
+    );
+  }
+
+  Future<void> registrarPagoGasto({
+    required int gastoId,
+    required double monto,
+    required String formaPago,
+    String? observacion,
+  }) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.insert('pagos_gastos', {
+        'gasto_id': gastoId,
+        'monto': monto,
+        'forma_pago': formaPago,
+        'fecha': DateTime.now().toIso8601String(),
+        if (observacion != null) 'observacion': observacion,
+      });
+      await txn.rawUpdate(
+        'UPDATE gastos SET saldo_pendiente = MAX(0, saldo_pendiente - ?) WHERE id = ?',
+        [monto, gastoId],
+      );
+    });
+  }
+
+  Future<int> eliminarGasto(int id) async {
+    final db = await database;
+    return await db.delete('gastos', where: 'id = ?', whereArgs: [id]);
+  }
+
   // ── REPORTES ───────────────────────────────────────────────────────────────
 
-  /// Flujo de Caja: ingresos en efectivo, compras en efectivo, gastos en efectivo
   Future<Map<String, double>> obtenerFlujoCaja(String filtro) async {
     final db = await database;
     final ahora = DateTime.now();
@@ -705,44 +797,60 @@ class DatabaseHelper {
     }
     final desde = inicio.toIso8601String();
 
-    // Ingresos en efectivo (ventas con forma_pago Efectivo)
+    // Ingresos de contado (todo excepto crédito)
     final ingRows = await db.rawQuery('''
       SELECT COALESCE(SUM(total), 0) AS total
       FROM ventas
-      WHERE fecha >= ? AND LOWER(forma_pago) = 'efectivo'
+      WHERE fecha >= ? AND LOWER(forma_pago) != 'crédito'
     ''', [desde]);
     final ingresosEfectivo = (ingRows.first['total'] as num?)?.toDouble() ?? 0;
 
-    // Compras pagadas en efectivo
+    // Compras pagadas de contado (todo excepto crédito)
     final compRows = await db.rawQuery('''
       SELECT COALESCE(SUM(total), 0) AS total
       FROM compras
-      WHERE fecha >= ? AND LOWER(forma_pago) = 'efectivo'
+      WHERE fecha >= ? AND LOWER(forma_pago) != 'crédito'
     ''', [desde]);
     final comprasEfectivo = (compRows.first['total'] as num?)?.toDouble() ?? 0;
 
-    // Pagos a proveedor en efectivo (de compras a crédito pagadas en efectivo)
+    // Pagos a proveedor de contado
     final pagoProvRows = await db.rawQuery('''
       SELECT COALESCE(SUM(monto), 0) AS total
       FROM pagos_proveedor
-      WHERE fecha >= ? AND LOWER(forma_pago) = 'efectivo'
+      WHERE fecha >= ? AND LOWER(forma_pago) != 'crédito'
     ''', [desde]);
     final pagosProvEfectivo = (pagoProvRows.first['total'] as num?)?.toDouble() ?? 0;
 
     final totalComprasEfectivo = comprasEfectivo + pagosProvEfectivo;
 
+    // Gastos de contado (todo excepto crédito)
+    final gastosRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(valor), 0) AS total
+      FROM gastos
+      WHERE fecha >= ? AND LOWER(forma_pago) != 'crédito'
+    ''', [desde]);
+    final gastosEfectivo = (gastosRows.first['total'] as num?)?.toDouble() ?? 0;
+
+    // Pagos de gastos a crédito de contado
+    final pagoGastosRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(monto), 0) AS total
+      FROM pagos_gastos
+      WHERE fecha >= ? AND LOWER(forma_pago) != 'crédito'
+    ''', [desde]);
+    final pagosGastosEfectivo = (pagoGastosRows.first['total'] as num?)?.toDouble() ?? 0;
+
+    final totalGastosEfectivo = gastosEfectivo + pagosGastosEfectivo;
+
     return {
       'ingresos_efectivo': ingresosEfectivo,
       'compras_efectivo': totalComprasEfectivo,
-      'gastos_efectivo': 0, // Módulo gastos pendiente
-      'total_caja': ingresosEfectivo - totalComprasEfectivo,
+      'gastos_efectivo': totalGastosEfectivo,
+      'total_caja': ingresosEfectivo - totalComprasEfectivo - totalGastosEfectivo,
     };
   }
 
-  /// Cuentas por Cobrar: ventas a crédito no pagadas totalmente
   Future<List<Map<String, dynamic>>> obtenerCuentasPorCobrar() async {
     final db = await database;
-    // Ventas a crédito con la suma de abonos
     final rows = await db.rawQuery('''
       SELECT
         v.id,
@@ -768,7 +876,6 @@ class DatabaseHelper {
     }).toList();
   }
 
-  /// Cuentas por Pagar: compras a crédito no pagadas
   Future<List<Map<String, dynamic>>> obtenerCuentasPorPagar() async {
     final db = await database;
     return await db.query(
@@ -778,7 +885,6 @@ class DatabaseHelper {
     );
   }
 
-  /// Estado de Resultado: ingresos, costos, gastos en un período
   Future<Map<String, double>> obtenerEstadoResultado(String filtro) async {
     final db = await database;
     final ahora = DateTime.now();
@@ -789,25 +895,31 @@ class DatabaseHelper {
     } else if (filtro == 'Mes') {
       inicio = DateTime(ahora.year, ahora.month, 1);
     } else {
-      // Año
       inicio = DateTime(ahora.year, 1, 1);
     }
     final desde = inicio.toIso8601String();
 
-    // Total ingresos (todas las ventas: contado + crédito)
+    // Total ingresos
     final ingRows = await db.rawQuery('''
       SELECT COALESCE(SUM(total), 0) AS total FROM ventas WHERE fecha >= ?
     ''', [desde]);
     final totalIngresos = (ingRows.first['total'] as num?)?.toDouble() ?? 0;
 
-    // Total costos (compras)
+    // Total costos (costo de mercancía vendida)
     final costoRows = await db.rawQuery('''
-      SELECT COALESCE(SUM(total), 0) AS total FROM compras WHERE fecha >= ?
+      SELECT COALESCE(SUM(dv.cantidad * i.precio_compra), 0) AS total
+      FROM detalle_ventas dv
+      JOIN ventas v ON dv.venta_id = v.id
+      JOIN inventario i ON dv.producto_id = i.id
+      WHERE v.fecha >= ?
     ''', [desde]);
     final totalCostos = (costoRows.first['total'] as num?)?.toDouble() ?? 0;
 
-    // Gastos operativos (módulo pendiente, por ahora 0)
-    final totalGastos = 0.0;
+    // Total gastos operativos
+    final gastosRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(valor), 0) AS total FROM gastos WHERE fecha >= ?
+    ''', [desde]);
+    final totalGastos = (gastosRows.first['total'] as num?)?.toDouble() ?? 0;
 
     return {
       'total_ingresos': totalIngresos,
@@ -817,7 +929,7 @@ class DatabaseHelper {
     };
   }
 
-  /// Total general de compras (para dashboard)
+  /// Total de compras de hoy (para dashboard)
   Future<double> obtenerTotalComprasHoy() async {
     final db = await database;
     final hoy = DateTime.now();
@@ -829,12 +941,205 @@ class DatabaseHelper {
     return (rows.first['total'] as num?)?.toDouble() ?? 0;
   }
 
-  /// Total acumulado de compras
+  /// Total acumulado de compras (para dashboard)
   Future<double> obtenerTotalComprasAcumulado() async {
     final db = await database;
     final rows = await db.rawQuery(
       'SELECT COALESCE(SUM(total), 0) AS total FROM compras',
     );
     return (rows.first['total'] as num?)?.toDouble() ?? 0;
+  }
+
+  /// Total acumulado de gastos (para dashboard)
+  Future<double> obtenerTotalGastosAcumulado() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+      'SELECT COALESCE(SUM(valor), 0) AS total FROM gastos',
+    );
+    return (rows.first['total'] as num?)?.toDouble() ?? 0;
+  }
+
+  /// Obtener datos del Kardex (movimiento de inventario)
+  Future<List<Map<String, dynamic>>> obtenerKardex() async {
+    final db = await database;
+    return await db.rawQuery('''
+      SELECT
+        i.id,
+        i.codigo,
+        i.nombre,
+        i.precio_compra,
+        COALESCE(ce.total_entradas, 0) AS entradas,
+        COALESCE(cs.total_salidas, 0)  AS salidas,
+        i.cantidad                     AS stock,
+        i.cantidad * i.precio_compra   AS valor_inventario
+      FROM inventario i
+      LEFT JOIN (
+        SELECT producto_id, SUM(cantidad) AS total_entradas
+        FROM compras GROUP BY producto_id
+      ) ce ON ce.producto_id = i.id
+      LEFT JOIN (
+        SELECT producto_id, SUM(cantidad) AS total_salidas
+        FROM detalle_ventas GROUP BY producto_id
+      ) cs ON cs.producto_id = i.id
+      ORDER BY i.nombre ASC
+    ''');
+  }
+
+  /// Poblar la base de datos con datos de demostración
+  Future<void> seedDemoData() async {
+    final db = await database;
+    final ahora = DateTime.now().toIso8601String();
+
+    await db.transaction((txn) async {
+      // 1. Limpiar todas las tablas transaccionales
+      await txn.delete('detalle_ventas');
+      await txn.delete('abonos');
+      await txn.delete('ventas');
+      await txn.delete('pagos_proveedor');
+      await txn.delete('compras');
+      await txn.delete('pagos_gastos');
+      await txn.delete('gastos');
+
+      // 2. Definir productos con precios
+      final productos = [
+        {'nombre': 'Café Volcán en granos 250gr',        'codigo': 'CV250',  'precio_compra': 11460.0, 'precio_venta': 31460.0},
+        {'nombre': 'Café Finca en grano 454gr',          'codigo': 'CF454',  'precio_compra': 45780.0, 'precio_venta': 65780.0},
+        {'nombre': 'Café Mujeres Cafeteras en granos',   'codigo': 'CMC',    'precio_compra': 45780.0, 'precio_venta': 65780.0},
+        {'nombre': 'Café Origen Nariño en granos 454gr', 'codigo': 'CON454', 'precio_compra': 45780.0, 'precio_venta': 65780.0},
+        {'nombre': 'Café Colina en grano 454gr',         'codigo': 'CC454',  'precio_compra': 36650.0, 'precio_venta': 56650.0},
+      ];
+
+      // 3. Crear o actualizar productos en inventario
+      final Map<String, int> productoIds = {};
+      for (final p in productos) {
+        final existentes = await txn.query('inventario',
+            where: 'nombre = ?', whereArgs: [p['nombre']]);
+        int id;
+        if (existentes.isNotEmpty) {
+          id = existentes.first['id'] as int;
+          await txn.update('inventario', {
+            'codigo': p['codigo'],
+            'precio_compra': p['precio_compra'],
+            'precio_venta': p['precio_venta'],
+            'cantidad': 0,
+          }, where: 'id = ?', whereArgs: [id]);
+        } else {
+          id = await txn.insert('inventario', {
+            'codigo': p['codigo'],
+            'nombre': p['nombre'],
+            'cantidad': 0,
+            'precio_compra': p['precio_compra'],
+            'precio_venta': p['precio_venta'],
+            'stock_minimo': 5,
+            'fecha_registro': ahora,
+          });
+        }
+        productoIds[p['nombre'] as String] = id;
+      }
+
+      // 4. Insertar compras (auto-incrementa stock)
+      final compras = [
+        {'nombre': 'Café Volcán en granos 250gr',        'cantidad': 100, 'precio': 11460.0, 'formaPago': 'Efectivo'},
+        {'nombre': 'Café Finca en grano 454gr',          'cantidad': 150, 'precio': 45780.0, 'formaPago': 'Nequi'},
+        {'nombre': 'Café Mujeres Cafeteras en granos',   'cantidad': 200, 'precio': 45780.0, 'formaPago': 'Nequi'},
+        {'nombre': 'Café Origen Nariño en granos 454gr', 'cantidad': 250, 'precio': 45780.0, 'formaPago': 'Crédito'},
+        {'nombre': 'Café Colina en grano 454gr',         'cantidad': 300, 'precio': 36650.0, 'formaPago': 'Crédito'},
+      ];
+
+      for (final c in compras) {
+        final nombre = c['nombre'] as String;
+        final cantidad = c['cantidad'] as int;
+        final precio = c['precio'] as double;
+        final formaPago = c['formaPago'] as String;
+        final prodId = productoIds[nombre]!;
+        final prod = await txn.query('inventario', where: 'id = ?', whereArgs: [prodId]);
+        final codigo = prod.first['codigo'] as String;
+
+        await txn.insert('compras', {
+          'proveedor': 'Proveedor Demo',
+          'producto_id': prodId,
+          'codigo_producto': codigo,
+          'nombre_producto': nombre,
+          'cantidad': cantidad,
+          'precio_unitario': precio,
+          'total': precio * cantidad,
+          'forma_pago': formaPago,
+          'fecha': ahora,
+          'pagada': formaPago.toLowerCase() == 'crédito' ? 0 : 1,
+        });
+
+        await txn.rawUpdate(
+          'UPDATE inventario SET cantidad = cantidad + ? WHERE id = ?',
+          [cantidad, prodId],
+        );
+      }
+
+      // 5. Insertar ventas (auto-decrementa stock)
+      final ventas = [
+        {'nombre': 'Café Volcán en granos 250gr',        'cantidad': 50,  'precio': 31460.0, 'formaPago': 'Efectivo'},
+        {'nombre': 'Café Finca en grano 454gr',          'cantidad': 100, 'precio': 65780.0, 'formaPago': 'Nequi'},
+        {'nombre': 'Café Mujeres Cafeteras en granos',   'cantidad': 150, 'precio': 65780.0, 'formaPago': 'Nequi'},
+        {'nombre': 'Café Origen Nariño en granos 454gr', 'cantidad': 200, 'precio': 65780.0, 'formaPago': 'Nequi'},
+        {'nombre': 'Café Colina en grano 454gr',         'cantidad': 250, 'precio': 56650.0, 'formaPago': 'Crédito'},
+      ];
+
+      for (final v in ventas) {
+        final nombre = v['nombre'] as String;
+        final cantidad = v['cantidad'] as int;
+        final precio = v['precio'] as double;
+        final formaPago = v['formaPago'] as String;
+        final prodId = productoIds[nombre]!;
+        final prod = await txn.query('inventario', where: 'id = ?', whereArgs: [prodId]);
+        final codigo = prod.first['codigo'] as String;
+        final subtotal = precio * cantidad;
+
+        final ventaId = await txn.insert('ventas', {
+          'fecha': ahora,
+          'forma_pago': formaPago,
+          'total': subtotal,
+          'tipo': formaPago.toLowerCase() == 'crédito' ? 'crédito' : 'contado',
+        });
+
+        await txn.insert('detalle_ventas', {
+          'venta_id': ventaId,
+          'producto_id': prodId,
+          'codigo': codigo,
+          'nombre': nombre,
+          'cantidad': cantidad,
+          'precio_unitario': precio,
+          'subtotal': subtotal,
+        });
+
+        await txn.rawUpdate(
+          'UPDATE inventario SET cantidad = cantidad - ? WHERE id = ? AND cantidad >= ?',
+          [cantidad, prodId, cantidad],
+        );
+      }
+
+      // 6. Insertar gastos (todos Nequi, contado)
+      final gastos = [
+        {'descripcion': 'Agua',              'categoria': 'Agua',              'valor': 100000.0},
+        {'descripcion': 'Luz',               'categoria': 'Luz',               'valor': 70000.0},
+        {'descripcion': 'Internet',          'categoria': 'Internet',          'valor': 150000.0},
+        {'descripcion': 'Nómina',            'categoria': 'Nómina',            'valor': 2000000.0},
+        {'descripcion': 'Seguridad Social',  'categoria': 'Seguridad Social',  'valor': 500000.0},
+        {'descripcion': 'Arriendo',          'categoria': 'Arriendo',          'valor': 2000000.0},
+        {'descripcion': 'Útiles de Aseo',    'categoria': 'Útiles de Aseo',    'valor': 50000.0},
+        {'descripcion': 'Vigilancia',        'categoria': 'Vigilancia',        'valor': 70000.0},
+      ];
+
+      for (final g in gastos) {
+        await txn.insert('gastos', {
+          'descripcion': g['descripcion'],
+          'categoria': g['categoria'],
+          'valor': g['valor'],
+          'forma_pago': 'Nequi',
+          'tipo': 'contado',
+          'saldo_pendiente': 0.0,
+          'fecha': ahora,
+          'fecha_registro': ahora,
+        });
+      }
+    });
   }
 }

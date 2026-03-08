@@ -152,15 +152,7 @@ class _ComprasPageState extends State<ComprasPage> {
 
   // ── Input por voz ─────────────────────────────────────────────────────────
 
-  Future<void> _registrarPorVoz() async {
-    final texto = await VoiceListeningModal.show(
-      context,
-      titulo: 'Dicta tu compra',
-      ejemplo: '"Compré 100 Café Volcán a 11460 en efectivo"',
-      color: const Color(0xFF3366FF),
-    );
-    if (texto == null || texto.isEmpty) return;
-
+  Future<void> _procesarVozCompra(String texto) async {
     // Usar parsearVenta para matchear productos del inventario
     final parser = VoiceParser();
     final resultado = await parser.parsearVenta(texto);
@@ -180,7 +172,7 @@ class _ComprasPageState extends State<ComprasPage> {
           // Si dice "mil" después, multiplicar
           final despues = texto.toLowerCase().substring(m.end).trim();
           if (despues.startsWith('mil')) {
-            precioDetectado = precioDetectado! * 1000;
+            precioDetectado = precioDetectado * 1000;
           }
         }
       }
@@ -296,12 +288,11 @@ class _ComprasPageState extends State<ComprasPage> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Botón voz secundario
-          FloatingActionButton.small(
+          // Botón voz secundario (mantener presionado)
+          VoiceListeningModal.holdButton(
+            onResult: _procesarVozCompra,
             heroTag: 'voice_compras',
-            onPressed: _registrarPorVoz,
-            backgroundColor: const Color(0xFF1A2A5E),
-            child: const Icon(Icons.mic, color: Colors.amberAccent, size: 20),
+            mini: true,
           ),
           const SizedBox(height: 10),
           // Botón nueva compra principal

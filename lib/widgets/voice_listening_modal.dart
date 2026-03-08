@@ -3,7 +3,9 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/voice_service.dart';
 
 /// Modal reutilizable de escucha por voz.
-/// Muestra una animación pulsante mientras escucha y devuelve el texto reconocido.
+/// Soporta dos modos:
+///   1. show()      — toque normal, escucha hasta que el usuario deje de hablar
+///   2. showHold()  — mantener presionado, escucha mientras el dedo esté abajo
 class VoiceListeningModal extends StatefulWidget {
   final String titulo;
   final String ejemplo;
@@ -35,8 +37,244 @@ class VoiceListeningModal extends StatefulWidget {
     );
   }
 
+  /// Devuelve un Widget de botón de micrófono que escucha mientras
+  /// se mantiene presionado y ejecuta [onResult] al soltar.
+  static Widget holdButton({
+    required Future<void> Function(String texto) onResult,
+    Color color = const Color(0xFF1A2A5E),
+    Color iconColor = Colors.amberAccent,
+    double size = 56,
+    bool mini = false,
+    String heroTag = 'voice_hold',
+  }) {
+    return _VoiceHoldButton(
+      onResult: onResult,
+      color: color,
+      iconColor: iconColor,
+      size: size,
+      mini: mini,
+      heroTag: heroTag,
+    );
+  }
+
   @override
   State<VoiceListeningModal> createState() => _VoiceListeningModalState();
+}
+
+/// Botón que escucha mientras se mantiene presionado
+class _VoiceHoldButton extends StatefulWidget {
+  final Future<void> Function(String texto) onResult;
+  final Color color;
+  final Color iconColor;
+  final double size;
+  final bool mini;
+  final String heroTag;
+
+  const _VoiceHoldButton({
+    required this.onResult,
+    required this.color,
+    required this.iconColor,
+    required this.size,
+    required this.mini,
+    required this.heroTag,
+  });
+
+  @override
+  State<_VoiceHoldButton> createState() => _VoiceHoldButtonState();
+}
+
+class _VoiceHoldButtonState extends State<_VoiceHoldButton>
+    with SingleTickerProviderStateMixin {
+  final VoiceService _voice = VoiceService.instance;
+  bool _listening = false;
+  String _textoAcumulado = '';
+  late AnimationController _pulseCtrl;
+  OverlayEntry? _overlay;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseCtrl.dispose();
+    _removeOverlay();
+    if (_listening) _voice.stopListening();
+    super.dispose();
+  }
+
+  void _showOverlay() {
+    _removeOverlay();
+    _overlay = OverlayEntry(
+      builder: (_) => _VoiceOverlay(
+        animation: _pulseCtrl,
+        texto: _textoAcumulado,
+      ),
+    );
+    Overlay.of(context).insert(_overlay!);
+  }
+
+  void _updateOverlay() {
+    _overlay?.markNeedsBuild();
+  }
+
+  void _removeOverlay() {
+    _overlay?.remove();
+    _overlay = null;
+  }
+
+  Future<void> _onDown(TapDownDetails _) async {
+    _textoAcumulado = '';
+    final ok = await _voice.initialize();
+    if (!ok || !mounted) return;
+
+    setState(() => _listening = true);
+    _pulseCtrl.repeat(reverse: true);
+    _showOverlay();
+
+    await _voice.startListening(
+      onResult: (texto, esFinal) {
+        if (!mounted) return;
+        _textoAcumulado = texto;
+        _updateOverlay();
+      },
+      onStatus: (_) {},
+    );
+  }
+
+  Future<void> _onUp() async {
+    if (!_listening) return;
+    setState(() => _listening = false);
+    _pulseCtrl.stop();
+    _pulseCtrl.reset();
+
+    await _voice.stopListening();
+    // Pequeña espera para que llegue el resultado final
+    await Future.delayed(const Duration(milliseconds: 300));
+    _removeOverlay();
+
+    if (_textoAcumulado.isNotEmpty && mounted) {
+      await widget.onResult(_textoAcumulado);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final btnSize = widget.mini ? 40.0 : widget.size;
+    return GestureDetector(
+      onTapDown: _onDown,
+      onTapUp: (_) => _onUp(),
+      onTapCancel: () => _onUp(),
+      child: AnimatedBuilder(
+        animation: _pulseCtrl,
+        builder: (ctx, child) {
+          final scale = 1.0 + (_listening ? _pulseCtrl.value * 0.12 : 0);
+          return Transform.scale(
+            scale: scale,
+            child: Container(
+              width: btnSize,
+              height: btnSize,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _listening ? Colors.red : widget.color,
+                boxShadow: _listening
+                    ? [BoxShadow(color: Colors.red.withValues(alpha: 0.4), blurRadius: 16, spreadRadius: 2)]
+                    : [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 6)],
+              ),
+              child: Icon(
+                _listening ? Icons.mic : Icons.mic_none,
+                color: _listening ? Colors.white : widget.iconColor,
+                size: widget.mini ? 20 : 24,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Overlay translúcido mostrado mientras se escucha
+class _VoiceOverlay extends StatelessWidget {
+  final Animation<double> animation;
+  final String texto;
+
+  const _VoiceOverlay({required this.animation, required this.texto});
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: IgnorePointer(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 100),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withValues(alpha: 0),
+                  Colors.black.withValues(alpha: 0.7),
+                ],
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedBuilder(
+                  animation: animation,
+                  builder: (_, __) {
+                    return Icon(
+                      Icons.mic,
+                      size: 32 + animation.value * 6,
+                      color: Colors.red.shade300,
+                    );
+                  },
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Mantén presionado…',
+                  style: GoogleFonts.montserrat(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (texto.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      texto,
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.montserrat(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _VoiceListeningModalState extends State<VoiceListeningModal>
