@@ -2,6 +2,8 @@
 
 Aplicación móvil desarrollada en **Flutter** para la gestión de caja de microempresas. Permite registrar ingresos, compras, gastos, controlar inventario y generar reportes.
 
+Para ver como funciona la aplicacion, ve el siguiente video: [https://www.youtube.com/watch?v=BGqxkBc8AWY](https://www.youtube.com/watch?v=BGqxkBc8AWY)
+
 ---
 
 ## Requisitos previos
